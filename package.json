@@ -11,6 +11,10 @@
       "require": "./src/caching.js"
     }
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SpikeNew7774/justcacheit.git"
+  },
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
