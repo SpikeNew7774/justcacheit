@@ -1,0 +1,27 @@
+{
+  "name": "justcacheit",
+  "private": false,
+  "version": "1.0.0",
+  "description": "A customizable cache middleware for Node.js with support for filesystem and in-memory caching.",
+  "main": "./src/caching.js",
+  "type": "commonjs",
+  "exports": {
+    ".": {
+      "import": "./src/caching.js",
+      "require": "./src/caching.js"
+    }
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "nodejs",
+    "express",
+    "cache",
+    "middleware",
+    "commonjs",
+    "es6"
+  ],
+  "author": "Spikerko",
+  "license": "MIT"
+}
