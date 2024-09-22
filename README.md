@@ -45,6 +45,9 @@ caching: object;
 \
 \
 caching.cache(): function;
+\
+\
+caching.purge(): function;
 
 - caching.cache({
     - browser: number; (Browser TTL, default=300, seconds),
