@@ -2,7 +2,7 @@
   "name": "justcacheit",
   "private": false,
   "version": "1.0.0",
-  "description": "A customizable cache middleware for Node.js with support for filesystem and in-memory caching.",
+  "description": "justcacheit is an NPM Module that can easily cache your endpoints in Express NodeJS",
   "main": "./src/caching.js",
   "type": "commonjs",
   "exports": {
