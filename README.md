@@ -52,7 +52,8 @@ caching.purge(): function;
 - caching.cache({
     - browser: number; (Browser TTL, default=300, seconds),
     - server: number; (Server TTL, default=600, seconds),
-    - store: string; (Cache Store, default="fs", options: "fs": FileSystem | "mem": Memory)
+    - store: string; (Cache Store, default="fs", options: "fs": FileSystem | "mem": Memory),
+    - notCache: array; (Which status codes not to cache, example: ["200-300", "500"], default = ["299-599"])
 - })
 
 - caching.purge({
