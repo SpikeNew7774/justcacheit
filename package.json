@@ -1,8 +1,8 @@
 {
   "name": "justcacheit",
   "private": false,
-  "version": "1.0.0",
-  "description": "justcacheit is an NPM Module that can easily cache your endpoints in Express NodeJS",
+  "version": "1.1.0",
+  "description": "justcacheit is an NPM Package that can easily cache your endpoints in Express NodeJS",
   "main": "./src/caching.js",
   "type": "commonjs",
   "exports": {
@@ -27,5 +27,8 @@
     "es6"
   ],
   "author": "Spikerko",
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "mime-types": "^2.1.35"
+  }
 }

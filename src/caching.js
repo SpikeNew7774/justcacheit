@@ -1,197 +1,164 @@
 const fs = require('fs');
 const path = require('path');
+const mime = require('mime-types');
 
-// Resolve the directory from where the module is imported
-const moduleDir = path.dirname(require.main?.filename || process.mainModule?.filename ? process.mainModule?.filename : process.env?.TEMP);
-const CACHE_DIR = path.join(moduleDir, '.justcacheitcache');
+const moduleDir = path.dirname(require.main?.filename);
+const CACHE_DIR = path.join(moduleDir, '.cache');
 
-// Ensure the cache directory exists for "fs" storage
 if (!fs.existsSync(CACHE_DIR)) {
   fs.mkdirSync(CACHE_DIR);
 }
 
-// In-memory cache store
-const cache = new Map();
-
-// Function to handle file-based caching (for "fs" store)
-function cacheToFile(key, cacheEntry) {
-  const filePath = path.join(CACHE_DIR, encodeURIComponent(key));
-  fs.writeFileSync(filePath, JSON.stringify(cacheEntry), 'utf8'); // Serialize cacheEntry before writing
+// Helper functions
+function cacheToFile(key, data, metadata) {
+  fs.writeFileSync(path.join(CACHE_DIR, `${encodeURIComponent(key)}.data`), data);
+  fs.writeFileSync(path.join(CACHE_DIR, `${encodeURIComponent(key)}.meta`), JSON.stringify(metadata));
 }
 
-function readFromFile(key) {
-  const filePath = path.join(CACHE_DIR, encodeURIComponent(key));
-  if (fs.existsSync(filePath)) {
-    const cachedData = fs.readFileSync(filePath, 'utf8');
-    return JSON.parse(cachedData); // Deserialize data when reading
+function readFromCache(key) {
+  const dataPath = path.join(CACHE_DIR, `${encodeURIComponent(key)}.data`);
+  const metaPath = path.join(CACHE_DIR, `${encodeURIComponent(key)}.meta`);
+  if (fs.existsSync(dataPath) && fs.existsSync(metaPath)) {
+    const data = fs.readFileSync(dataPath);
+    const metadata = JSON.parse(fs.readFileSync(metaPath));
+    return { data, metadata };
   }
   return null;
 }
 
-function cacheMiddleware({ browser = 300, server = 600, store = "fs" } = {}) {
+function normalizeURL(url) {
+  const parsedUrl = new URL(url, 'http://dummy');
+  parsedUrl.searchParams.sort();
+  return parsedUrl.pathname + parsedUrl.search;
+}
+
+function getStatusSet(notCache) {
+  const statusSet = new Set();
+  notCache.forEach(item => {
+    if (typeof item === 'string' && item.includes('-')) {
+      const [start, end] = item.split('-').map(Number);
+      for (let i = start; i <= end; i++) {
+        statusSet.add(i);
+      }
+    } else {
+      statusSet.add(Number(item));
+    }
+  });
+  return statusSet;
+}
+
+function cleanupExpiredCache(serverExpiry) {
+  const files = fs.readdirSync(CACHE_DIR);
+  const now = Date.now();
+
+  files.forEach(file => {
+    const metaFilePath = path.join(CACHE_DIR, file);
+    if (file.endsWith('.meta')) {
+      const metadata = JSON.parse(fs.readFileSync(metaFilePath, 'utf8'));
+      if (now - metadata.timestamp > serverExpiry * 1000) {
+        const dataFilePath = metaFilePath.replace('.meta', '.data');
+        fs.unlinkSync(metaFilePath);
+        if (fs.existsSync(dataFilePath)) {
+          fs.unlinkSync(dataFilePath);
+        }
+      }
+    }
+  });
+}
+
+function scheduleCacheCleanup(serverExpiry) {
+  setInterval(() => {
+    cleanupExpiredCache(serverExpiry)
+  }, serverExpiry * 1000);
+}
+
+// Middleware
+function cacheMiddleware({ browser = 300, server = 600, store = "fs", notCache = ["299-599"] } = {}) {
+  const notCacheSet = getStatusSet(notCache);
+
+  // Schedule cache cleanup
+  if (store === "fs") {
+    scheduleCacheCleanup(server);
+  }
+
   return (req, res, next) => {
-    const key = req.originalUrl;
+    const key = normalizeURL(req.originalUrl);
+    const mimeType = mime.lookup(req.originalUrl);
 
-    // Initialize the cache object on the request
-    req.cache = {
-      hit: false,
-      stale: false,
-      revalidating: false,
-      miss: false,
-      bypass: false,
-      type: store,
-      fresh: false
-    };
-
-    let cachedData;
-
-    // Check the cache store type and retrieve the cached data
+    let cachedData = null;
     if (store === "mem") {
       cachedData = cache.get(key);
     } else if (store === "fs") {
-      cachedData = readFromFile(key);
+      cachedData = readFromCache(key);
     }
 
-    // If cached data exists
-    if (cachedData) {
-      const cacheAge = Date.now() - cachedData.timestamp;
-      if (cacheAge <= server * 1000) {
-        // If data is within the server cache time, it's a HIT
-        req.cache.hit = true;
-        res.setHeader('X-Cache', 'HIT');
-        res.setHeader('Cache-Control', `public, max-age=${browser}`);
-        return res.send(cachedData.body);
-      } else {
-        // Data is stale, so we serve stale data but indicate it's stale
-        req.cache.stale = true;
-        req.cache.revalidating = true;
-        res.setHeader('X-Cache', 'STALE');
-        res.setHeader('Cache-Control', `public, max-age=${browser}`);
-        
-        // Serve stale data
-        res.send(cachedData.body);
-        
-        // In the background, revalidate the cache
-        res.on('finish', () => {
-          // Revalidate and update the cache in the background
-          const originalSend = res.send.bind(res);
-          res.send = (newBody) => {
-            const cacheEntry = { body: newBody, timestamp: Date.now() };
-
-            // Cache data according to store type
-            if (store === "mem") {
-              cache.set(key, cacheEntry); // Memory-based cache
-            } else if (store === "fs") {
-              cacheToFile(key, cacheEntry); // File-based cache (serialized)
-            }
-
-            console.log(`Caching ${key} for server-side (${store}) for ${server} seconds`);
-            res.setHeader('X-Cache', 'REVALIDATING');
-
-            // Clear cache after SERVER_CACHE_TIME
-            setTimeout(() => {
-              if (store === "mem") {
-                cache.delete(key);
-              } else if (store === "fs") {
-                const filePath = path.join(CACHE_DIR, encodeURIComponent(key));
-                if (fs.existsSync(filePath)) {
-                  fs.unlinkSync(filePath); // Remove the cached file
-                }
-              }
-              console.log(`Cleared ${key} from server-side cache (${store})`);
-            }, server * 1000);
-
-            req.cache.hit = false;
-            req.cache.miss = false;
-            req.cache.bypass = false;
-            req.cache.stale = false;
-            req.cache.fresh = false;
-            req.cache.revalidating = false;
-
-            originalSend(newBody);
-          };
-
-          // Trigger cache update with a new request if needed
-          // (This logic might require a separate mechanism or request to fetch fresh data)
-        });
-
-        return;
-      }
-    } else {
-      // If no cached data exists, mark it as a MISS
-      req.cache.miss = true;
-      res.setHeader('X-Cache', 'MISS');
-    }
-
-    // Set browser cache headers for new data
     res.setHeader('Cache-Control', `public, max-age=${browser}`);
+    
+    if (cachedData && (Date.now() - cachedData.metadata.timestamp <= server * 1000)) {
+      res.setHeader('Content-Type', cachedData.metadata.contentType);
+      res.setHeader('X-Cache', 'HIT');
+      return res.end(cachedData.data);
+    }
 
-    // Modify response to cache data before sending it
     const originalSend = res.send.bind(res);
+    const originalSendFile = res.sendFile.bind(res);
     res.send = (body) => {
-      const cacheEntry = { body, timestamp: Date.now() };
-
-      // Cache data according to store type
-      if (store === "mem") {
-        cache.set(key, cacheEntry); // Memory-based cache
-      } else if (store === "fs") {
-        cacheToFile(key, cacheEntry); // File-based cache (serialized)
-      }
-
-      console.log(`Caching ${key} for server-side (${store}) for ${server} seconds`);
-      res.setHeader('X-Cache', 'FRESH'); // Or any suitable header for a fresh cache
-      req.cache.fresh = true
-
-      // Clear cache after SERVER_CACHE_TIME
-      setTimeout(() => {
+      if (!notCacheSet.has(res.statusCode)) {
+        const cacheEntry = {
+          body,
+          timestamp: Date.now(),
+          contentType: res.getHeader('Content-Type') || mimeType || 'text/html',
+        };
         if (store === "mem") {
-          cache.delete(key);
+          cache.set(key, cacheEntry);
         } else if (store === "fs") {
-          const filePath = path.join(CACHE_DIR, encodeURIComponent(key));
-          if (fs.existsSync(filePath)) {
-            fs.unlinkSync(filePath); // Remove the cached file
-          }
+          const isBinary = Buffer.isBuffer(body);
+          cacheToFile(key, body, { timestamp: Date.now(), contentType: cacheEntry.contentType, isBinary });
         }
-        console.log(`Cleared ${key} from server-side cache (${store})`);
-      }, server * 1000);
-
-      req.cache.hit = false;
-      req.cache.miss = false;
-      req.cache.bypass = false;
-      req.cache.stale = false;
-      req.cache.fresh = false;
-      req.cache.revalidating = false;
-
+      } else {
+        res.setHeader('X-Cache', 'BYPASS');
+      }
+      res.setHeader('X-Cache', 'FRESH');
       originalSend(body);
+    };
+
+    res.sendFile = (filePath, options = {}, callback) => {
+      const absolutePath = path.resolve(filePath);
+      fs.readFile(absolutePath, (err, data) => {
+        if (err) return originalSendFile(filePath, options, callback);
+
+        const contentType = mime.lookup(absolutePath) || 'application/octet-stream';
+        if (!notCacheSet.has(res.statusCode)) {
+          cacheToFile(key, data, { timestamp: Date.now(), contentType, isBinary: true });
+        }
+
+        !notCacheSet.has(res.statusCode) ? res.setHeader('X-Cache', 'FRESH') : res.setHeader('X-Cache', 'BYPASS') ;
+        res.setHeader('Content-Type', contentType);
+        res.setHeader('Cache-Control', `public, max-age=${browser}`);
+        res.end(data);
+
+        if (callback) return callback();
+      });
     };
 
     next();
   };
 }
 
-// Function to clear the cache, checking both memory and filesystem
 function clearCache({ url = null } = {}) {
   if (url) {
-    // Clear specific cache item from both memory and filesystem
-    const key = encodeURIComponent(url);
-
-    // Remove from memory
+    const key = encodeURIComponent(normalizeURL(url));
     cache.delete(key);
 
-    // Remove from filesystem
-    const filePath = path.join(CACHE_DIR, key);
-    if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
-    }
+    const dataPath = path.join(CACHE_DIR, `${key}.data`);
+    const metaPath = path.join(CACHE_DIR, `${key}.meta`);
+    if (fs.existsSync(dataPath)) fs.unlinkSync(dataPath);
+    if (fs.existsSync(metaPath)) fs.unlinkSync(metaPath);
 
     console.log(`Cleared cache for ${url}`);
   } else {
-    // Clear entire cache from memory and filesystem
-
-    // Memory cache
     cache.clear();
-
-    // Filesystem cache
+    
     fs.readdirSync(CACHE_DIR).forEach((file) => {
       fs.unlinkSync(path.join(CACHE_DIR, file));
     });
@@ -200,12 +167,7 @@ function clearCache({ url = null } = {}) {
   }
 }
 
-// Exports for CommonJS
 module.exports = {
   cache: cacheMiddleware,
   purge: clearCache,
 };
-
-// Exports for ES6 modules
-exports.cache = cacheMiddleware;
-exports.purge = clearCache;
